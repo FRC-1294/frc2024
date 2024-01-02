@@ -3,6 +3,8 @@ package frc.robot;
 import com.ctre.phoenix.sensors.CANCoder;
 import com.revrobotics.CANSparkMax;
 import com.revrobotics.RelativeEncoder;
+import com.revrobotics.SparkMaxPIDController;
+import com.revrobotics.CANSparkMax.ControlType;
 import com.revrobotics.CANSparkMax.IdleMode;
 import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 
@@ -20,6 +22,7 @@ public class SwerveModule {
     private final boolean mRotInverse;
     private final boolean mTransInverse;
     private final PIDController mRotPID;
+    public final SparkMaxPIDController mTransPID;
 
     // Hardware
     // Motor Controllers
@@ -33,9 +36,10 @@ public class SwerveModule {
     // Public Debugging Values
     private double mPIDOutput = 0.0;
     private double mDesiredRadians = 0.0;
+    private double mDesiredVel = 0.0;
 
     public SwerveModule(int rotID, int transID, int rotEncoderID, boolean rotInverse,
-            boolean transInverse, PIDController rotPID) {
+            boolean transInverse, Gains rotPID, Gains transPID) {
         // Setting Parameters
         mRotID = rotID;
         mTransID = transID;
@@ -57,19 +61,32 @@ public class SwerveModule {
         // Sets measurement to radians
 
         // ----Setting PID
-        mRotPID = rotPID;
+        mRotPID = rotPID.toWpiPID();
 
         // ----Setting PID Parameters
         mRotPID.enableContinuousInput(-Math.PI, Math.PI);
 
         // ----Setting Inversion
+        mRotMotor.restoreFactoryDefaults();
+        mTransMotor.restoreFactoryDefaults();
+
         mRotMotor.setInverted(mRotInverse);
         mTransMotor.setInverted(mTransInverse);
 
         mTransMotor.setIdleMode(IdleMode.kBrake);
         mRotMotor.setIdleMode(IdleMode.kBrake);
 
+        mTransPID = mTransMotor.getPIDController();
+
+        mTransPID.setP(transPID.kP, 0);
+        mTransPID.setI(transPID.kI, 0);
+        mTransPID.setD(transPID.kD, 0);
+        mTransPID.setFF(transPID.kFF, 0);
+        mTransMotor.enableVoltageCompensation(12);
+        mTransEncoder.setPositionConversionFactor(SwerveConstants.TRANS_RPM_TO_MPS * 60);
+        mTransEncoder.setVelocityConversionFactor(SwerveConstants.TRANS_RPM_TO_MPS);
         mTransEncoder.setPosition(0);
+        burnSparks();
     }
 
     // ------------------- State Settings
@@ -94,7 +111,6 @@ public class SwerveModule {
 
     public void setRotMotorRaw(double speed) {
         mRotMotor.set(speed);
-
     }
 
     /**
@@ -113,22 +129,19 @@ public class SwerveModule {
 
         // No turning motors over 90 degrees
         desiredState = SwerveModuleState.optimize(desiredState, getState().angle);
-
+        mDesiredVel = desiredState.speedMetersPerSecond;
         // PID Controller for both translation and rotation
-        mTransMotor.set(desiredState.speedMetersPerSecond / SwerveConstants.PHYSICAL_MAX_SPEED_MPS);
+        mTransPID.setReference(mDesiredVel, ControlType.kVelocity, 0);
         mDesiredRadians = desiredState.angle.getRadians();
         mPIDOutput = mRotPID.calculate(getRotPosition(), desiredState.angle.getRadians());
 
         mRotMotor.set(mPIDOutput);
-
     }
 
     public void setPID(double degrees) {
         mPIDOutput = mRotPID.calculate(getRotPosition(), Math.toRadians(degrees));
         mRotMotor.set(mPIDOutput);
-
     }
-
 
     /**
      * 
@@ -195,15 +208,33 @@ public class SwerveModule {
      * @return Returns velocity of translation motor with conversion
      */
     public double getTransVelocity() {
-        return getTransVelocityRaw() * SwerveConstants.TRANS_RPM_TO_MPS;
+        return getTransVelocityRaw();
     }
 
+    /**
+     * 
+     * @return Returns the applied voltage to the translation motor after nominal voltage
+     *         compensation
+     */
+    public double getTransAppliedVolts() {
+        return mTransMotor.getAppliedOutput() * mTransMotor.getBusVoltage();
+    }
 
     /**
      * Reset ONLY the translation encoder
      */
     public void resetEncoders() {
         mTransEncoder.setPosition(0);
+    }
+
+    /**
+     * 
+     * @return the translation attribute of the module state object which is the setpoint of the
+     *         translation PID In Meters/Sec
+     * 
+     */
+    public double getDesiredTransVel() {
+        return mDesiredVel;
     }
 
     /**
